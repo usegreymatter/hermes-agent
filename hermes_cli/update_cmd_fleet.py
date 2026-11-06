@@ -931,6 +931,7 @@ def _restart_macos_launchd_gateways(
             failed_or_stale_units.append("launchd (listing failed)")
             return
     from hermes_cli.update_cmd_posix_pause import already_restarted
+    from hermes_cli.gateway_launchd import _launchd_gateway_pid
     current_label = get_launchd_label()
     resumed = already_restarted()["labels"]  # paused for the update, restarted on the new code
     _restarted, _failed = ([], []) if current_label in resumed else _restart_launchd_gateway_after_update(
@@ -964,12 +965,13 @@ def _restart_macos_launchd_gateways(
                     failed_or_stale_units.append(label)
                 continue  # A profile without an installed job has no restart target.
             graceful_ok = False
-            if old_pid is not None and old_pid > 0:
+            gateway_pid = _launchd_gateway_pid(label, old_pid)
+            if gateway_pid is not None:
                 print(f"  → {label}: draining (up to {drain_budget:.0f}s)...")
                 from hermes_cli.update_cmd_drain_report import drain_progress_reporter
                 graceful_ok = _graceful_restart_via_sigusr1(
-                    old_pid, drain_timeout=drain_budget,
-                    on_progress=drain_progress_reporter(_gateway_home_for_pid(old_pid), budget_s=drain_budget))
+                    gateway_pid, drain_timeout=drain_budget,
+                    on_progress=drain_progress_reporter(_gateway_home_for_pid(gateway_pid), budget_s=drain_budget))
             if graceful_ok and _wait_for_launchd_service_pid(label, old_pid=old_pid, timeout=10.0, domain=domain):
                 # KeepAlive already respawned it on new code — a kickstart would kill it.
                 restarted_services.append(label)
@@ -1153,10 +1155,9 @@ def _gateway_home_for_pid(pid: int):
     """HERMES_HOME of the gateway ``pid`` per the fleet inventory, else None (own profile's file)."""
     with suppress(Exception):
         from hermes_cli.update_receipt import _profile_homes
-        from gateway.status import read_runtime_status
+        from gateway.status import live_gateway_pid_for_home
         for _profile, home in _profile_homes():
-            record = read_runtime_status(home / "gateway_state.json") or {}
-            if record.get("pid") == pid:
+            if live_gateway_pid_for_home(home) == pid:
                 return home
     return None
 

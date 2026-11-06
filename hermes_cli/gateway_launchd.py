@@ -33,6 +33,84 @@ def get_launchd_label() -> str:
     return f"ai.hermes.gateway-{suffix}" if suffix else "ai.hermes.gateway"
 
 
+def _launchd_gateway_pid(label: str, job_pid: int | None) -> int | None:
+    """Gateway owned by this job, distinct from its osascript/shell wrapper.
+
+    Only a home-scoped live record with a matching birth and job ancestry authorizes a
+    gateway signal. Unknown identity falls back to managing the job through launchd.
+    """
+    from gateway import status
+
+    if job_pid is None or job_pid <= 0:
+        return None
+    plist = _gw().get_launchd_plist_path().with_name(f"{label}.plist")
+    pinned = gateway_service_owner.pinned_home(plist)
+    if pinned is None:
+        return None
+    home = Path(pinned).expanduser()
+    pid = status.live_gateway_pid_for_home(home)
+    if pid is None:
+        return None
+    birth = status.get_process_start_time(pid)
+    records = (
+        status.read_runtime_status(home / "gateway_state.json"),
+        status._read_gateway_lock_record(home / "gateway.lock"),
+        status._read_pid_record(home / "gateway.pid"),
+    )
+    if birth is None or not any(
+        record and record.get("pid") == pid and record.get("start_time") == birth
+        for record in records
+    ):
+        return None
+    ancestor, seen = pid, set()
+    while ancestor and ancestor not in seen:
+        if ancestor == job_pid:
+            return pid
+        seen.add(ancestor)
+        ancestor = _gw()._get_parent_pid(ancestor)
+    return None
+
+
+def _launchd_service_pids(*, all_profiles: bool) -> set[int]:
+    """Protect both job wrappers and verified gateway children from orphan sweeps."""
+    gw = _gw()
+    labels = {gw.get_launchd_label()}
+    if all_profiles:
+        labels.update(gw.launchd_gateway_labels_for_install())
+    jobs = set()
+    for label in sorted(labels):
+        try:
+            jobs.add((label, gw._locate_launchd_gateway_service(label)[1]))
+        except subprocess.TimeoutExpired:
+            continue
+    if all_profiles:
+        jobs.update(_listed_launchd_jobs().items())
+    pids = set()
+    for label, pid in jobs:
+        if pid is not None and pid > 0:
+            pids.add(pid)
+            if gateway_pid := _launchd_gateway_pid(label, pid):
+                pids.add(gateway_pid)
+    return pids
+
+
+def _listed_launchd_jobs() -> dict[str, int]:
+    """Include legacy/foreign labels only for sweep protection, never restart targeting."""
+    try:
+        result = subprocess.run(["launchctl", "list"], timeout=5, **_gw()._CAPTURE_TEXT, check=False)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return {}
+    jobs = {}
+    if result.returncode == 0:
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if len(parts) >= 3 and parts[-1].startswith("ai.hermes.gateway"):
+                pid = _gw()._positive_pid(parts[0])
+                if pid is not None:
+                    jobs[parts[-1]] = pid
+    return jobs
+
+
 def _probe_launchd_domain_for_label(label: str) -> str:
     """Launchd domain managing ``label`` (uncached): ``gui/<uid>`` (Aqua), then ``user/<uid>``
     (Background/SSH), else the ``launchctl managername`` heuristic. Sibling profiles may live in

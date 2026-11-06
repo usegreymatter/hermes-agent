@@ -173,40 +173,9 @@ def _get_service_pids(all_profiles: bool = False) -> set:
             except (FileNotFoundError, subprocess.TimeoutExpired):
                 pass
 
-    # --- launchd (macOS) ---
     if is_macos():
-        labels = {get_launchd_label()}
-        if all_profiles:
-            # Whole fleet, mirroring the systemd ``hermes-gateway*`` glob above.
-            # Every gateway LaunchAgent, not just the invoking profile's — mirrors the systemd branch's
-            # ``hermes-gateway*`` pattern above. The update path restarts the whole fleet, and its
-            # stale-process sweep must not mistake a sibling service's fresh PID for a manual gateway it
-            # should kill (#41403).
-            labels.update(launchd_gateway_labels_for_install())
-        for label in sorted(labels):
-            try:
-                _domain, pid = _locate_launchd_gateway_service(label)
-            except subprocess.TimeoutExpired:
-                continue
-            if pid is not None and pid > 0:
-                pids.add(pid)
-        if all_profiles:
-            # Prefix scan also catches ai.hermes.gateway* agents the label derivation can't map
-            # (renamed profiles, other installs). Over-inclusion is safe: PIDs are only protected.
-            try:
-                result = subprocess.run(["launchctl", "list"], timeout=5, **_CAPTURE_TEXT, check=False)
-                if result.returncode == 0:
-                    for line in result.stdout.strip().splitlines():
-                        parts = line.split()
-                        if len(parts) >= 3 and parts[-1].startswith("ai.hermes.gateway"):
-                            try:
-                                pid = int(parts[0])
-                                if pid > 0:
-                                    pids.add(pid)
-                            except ValueError:
-                                pass
-            except (FileNotFoundError, subprocess.TimeoutExpired):
-                pass
+        from hermes_cli.gateway_launchd import _launchd_service_pids
+        pids.update(_launchd_service_pids(all_profiles=all_profiles))
 
     return pids
 

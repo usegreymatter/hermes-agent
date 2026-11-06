@@ -186,8 +186,9 @@ class TestProbeLaunchdDomainForLabel:
 
 
 class TestGetServicePidsScoping:
-    def _wire(self, monkeypatch):
+    def _wire(self, monkeypatch, tmp_path):
         monkeypatch.setattr(gw, "supports_systemd_services", lambda: False)
+        monkeypatch.setattr(gw, "get_launchd_plist_path", lambda: tmp_path / "ai.hermes.gateway.plist")
         # The all_profiles branch also runs a real ``launchctl list`` prefix scan; a developer
         # box with a live ai.hermes.gateway* fleet would leak its PIDs into the assertion.
         monkeypatch.setattr(gw.subprocess, "run", lambda *a, **k: _completed(0, ""))
@@ -206,18 +207,18 @@ class TestGetServicePidsScoping:
             gw, "_locate_launchd_gateway_service", lambda label: located[label]
         )
 
-    def test_all_profiles_returns_every_gateway_service_pid(self, monkeypatch):
+    def test_all_profiles_returns_every_gateway_service_pid(self, monkeypatch, tmp_path):
         """The update sweep's exclude-set must protect ALL freshly-restarted
         services, not only the invoking profile's (else the sweep SIGTERMs
         gateways launchd just respawned)."""
-        self._wire(monkeypatch)
+        self._wire(monkeypatch, tmp_path)
         assert gw._get_service_pids(all_profiles=True) == {100, 200}
 
-    def test_default_stays_scoped_to_current_profile(self, monkeypatch):
+    def test_default_stays_scoped_to_current_profile(self, monkeypatch, tmp_path):
         """Regression guard: default-scope callers (gateway status, cron,
         stop_profile_gateway's orphan reaper) must NOT start seeing sibling
         service PIDs — the reaper SIGTERM/SIGKILLs what they feed it."""
-        self._wire(monkeypatch)
+        self._wire(monkeypatch, tmp_path)
         assert gw._get_service_pids() == {100}
 
 
@@ -236,6 +237,11 @@ def _fleet(monkeypatch, tmp_path, *, current, labels, located,
     registered_checks.
     """
     from types import SimpleNamespace
+    from hermes_cli import gateway_launchd
+
+    # These routing cases model jobs running the gateway directly; wrapper identity
+    # resolution has its own on-disk behavior contract in test_launchd_wrapper_gateway_pid.
+    monkeypatch.setattr(gateway_launchd, "_launchd_gateway_pid", lambda label, pid: pid)
 
     rec = SimpleNamespace(
         kickstarts=[], drains=[], current_restarts=[], waits=[],

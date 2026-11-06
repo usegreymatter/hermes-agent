@@ -143,13 +143,14 @@ class TestServicePidSweepExclusion:
     """
 
     @pytest.fixture
-    def macos_launchd(self, monkeypatch):
+    def macos_launchd(self, monkeypatch, tmp_path):
         import hermes_cli.gateway as gateway_mod
 
         state = {"list_rc": 1, "print_rc": 0, "print_out": _PRINT_OUTPUT_RUNNING}
 
         monkeypatch.setattr(gateway_mod, "supports_systemd_services", lambda: False)
         monkeypatch.setattr(gateway_mod, "get_launchd_label", lambda: "ai.hermes.gateway")
+        monkeypatch.setattr(gateway_mod, "get_launchd_plist_path", lambda: tmp_path / "ai.hermes.gateway.plist")
         monkeypatch.setattr(gateway_mod, "_launchd_domain", lambda: "gui/501")
 
         def fake_run(argv, **kwargs):

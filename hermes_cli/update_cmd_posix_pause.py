@@ -156,16 +156,18 @@ def _discover_launchd() -> list[dict]:
         legacy_launchd_labels_for_install,
     )
     from hermes_cli.update_fleet_scope import launchd_label_foreign_home
+    from hermes_cli.gateway_launchd import _launchd_gateway_pid
     derived = launchd_gateway_labels_for_install()
     jobs = []
     for label in derived + legacy_launchd_labels_for_install(exclude=set(derived)):
         if launchd_label_foreign_home(label) is not None:
             continue
-        domain, pid = _locate_launchd_gateway_service(label)
+        domain, job_pid = _locate_launchd_gateway_service(label)
+        pid = _launchd_gateway_pid(label, job_pid)
         if domain is None or not pid or pid <= 0:
             continue
         plist = get_launchd_plist_path().with_name(f"{label}.plist")
-        jobs.append({"kind": "launchd", "label": label, "domain": domain, "plist": str(plist), "pid": int(pid),
+        jobs.append({"kind": "launchd", "label": label, "domain": domain, "plist": str(plist), "pid": int(pid), "job_pid": job_pid,
                      "home": _home_of(int(pid))})
     return jobs
 
@@ -303,6 +305,8 @@ def _left_running(units: list[dict], jobs: list[dict]) -> tuple[list[dict], list
                            "not prove it runs outside that unit's cgroup)")
     for job in jobs:
         if (_is_pid_ancestor_of_current_process(job["pid"])
+                # A wrapper may own the gateway and updater in separate child subtrees.
+                or _is_pid_ancestor_of_current_process(job.get("job_pid", job["pid"]))
                 or os.environ.get("XPC_SERVICE_NAME") == job["label"]):
             notices.append(f"  ↷ {job['label']} keeps running until after the update (this update runs "
                            "inside its launchd job)")
@@ -392,7 +396,7 @@ def _start_job(job: dict) -> None:
     subprocess.run(["launchctl", "kickstart", f"{job['domain']}/{job['label']}"],
                    capture_output=True, text=True, encoding="utf-8", errors="replace",
                    stdin=subprocess.DEVNULL, timeout=30, check=False)
-    if not _wait_for_launchd_service_pid(job["label"], old_pid=job["pid"], timeout=15.0, domain=job["domain"]):
+    if not _wait_for_launchd_service_pid(job["label"], old_pid=job.get("job_pid", job["pid"]), timeout=15.0, domain=job["domain"]):
         raise RuntimeError(f"{job['label']} did not come back under launchd")
 
 
