@@ -7,10 +7,12 @@ while the gateway waited on one cron job; neither surface said WHAT was being wa
 import json
 import time
 
+import pytest
+
 import cron.scheduler as sched
 from gateway.run import GatewayRunner
 from gateway.session_state import SessionState
-from hermes_cli.update_cmd_drain_report import drain_progress_reporter
+from hermes_cli.update_cmd_drain_report import drain_progress_reporter, read_active_work
 from gateway.status import flush_runtime_status
 
 
@@ -26,6 +28,31 @@ def _runner():
     runner._restart_requested = True
     runner.adapters = {}
     return runner
+
+
+def test_idle_drain_reports_explicitly_empty_work(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    runner = _runner()
+    runner._update_runtime_status("draining")
+    flush_runtime_status()
+
+    assert read_active_work(tmp_path) == []
+    out = []
+    tick = drain_progress_reporter(tmp_path, budget_s=600, interval_s=0.0, emit=out.append)
+    tick()
+    assert "no active work reported" in out[0]
+    assert "did not report" not in out[0]
+
+
+@pytest.mark.parametrize("contents", [None, "{", '{"gateway_state": "draining"}'])
+def test_unavailable_drain_report_remains_unknown(tmp_path, contents):
+    if contents is not None:
+        (tmp_path / "gateway_state.json").write_text(contents)
+    assert read_active_work(tmp_path) is None
+    out = []
+    tick = drain_progress_reporter(tmp_path, budget_s=600, interval_s=0.0, emit=out.append)
+    tick()
+    assert "did not report" in out[0]
 
 
 def test_draining_status_names_chat_and_cron_units_and_clears_when_running(tmp_path, monkeypatch):

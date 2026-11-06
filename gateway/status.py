@@ -1126,7 +1126,7 @@ def _prepare_runtime_status_update(
             ("gateway_state", gateway_state, None), ("exit_reason", exit_reason, None),
             ("restart_requested", restart_requested, bool),
             ("active_agents", active_agents, parse_active_agents),
-            ("active_work", active_work, lambda v: list(v) if v else None),
+            ("active_work", active_work, lambda v: list(v) if v is not None else None),
             ("served_profiles", served_profiles, lambda v: list(v or [])),
             # Profiles the multiplexer could not serve, name -> reason; clients fail fast on them.
             ("parked_profiles", parked_profiles, lambda v: {str(k): str(r) for k, r in dict(v or {}).items()}),
